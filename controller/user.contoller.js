@@ -2,6 +2,7 @@
 
 let User = require('../model/user.model');
 let Tweet = require('../model/twitt.model');
+let replyTweetModel = require('../model/replyTweet.model');
 var jwt = require('../services/jwt');
 var bcrypt = require('bcrypt-nodejs');
 var moment = require('moment');
@@ -141,8 +142,7 @@ function commands(req,res) {
                         }else if(userCorrect){
                             tweet.text = separador[1];
                             tweet.date = date;
-                            tweet.likes = 0;
-        
+                            
                             tweet.save((err,tweetsave)=>{
                                 if(err){
                                     res.status(500).send({message:"No se pudo guardar al usuario, error del sistema: ", err});
@@ -212,7 +212,7 @@ function commands(req,res) {
     }
     
 // ----------- Eliminar un Tweet -----------------    
-    else if(separador[0] == "DELETE_TWEET"){
+    else if(separador[0] == "DELETE_TWEET"){    
         if(req.user.sub){
             if(separador.length == 2){
                 if(separador[1].trim() != ''){
@@ -373,7 +373,7 @@ function commands(req,res) {
                     if(separador[1] == req.user.username){
                         res.status(400).send({message:"No puede buscarse usted mismo. Si quiere ver sus tweets vaya a su perfil"})
                     }else{
-                        User.findOne({username:separador[1]},{_id:0,follow:0,followers:0,phone:0,email:0,password:0,__v:0},(err,userView)=>{
+                        User.findOne({username:separador[1]},{_id:0,phone:0,email:0,password:0,__v:0},(err,userView)=>{
                             if(err){
                                 res.status(500).send({message:"Error general del servidor: ",err});
                             }else if(userView){
@@ -385,7 +385,7 @@ function commands(req,res) {
                             }else{
                                 res.status(404).send({message:"No se encontro a este usuario en la base de datos"});
                             }
-                        }).populate({path:"tweets",select:'text'});
+                        }).populate({path:"tweets",select:'text like replytweet retweets'}).populate({path:'follow', select:"name"}).populate({path:'followers', select:"name"});
                     }
                 }else{
                     res.status(400).send({message:"Ingrese todos los parametros"});
@@ -398,6 +398,324 @@ function commands(req,res) {
         }    
     }
     
+// ------------- Like tweet ----------------------
+
+    /*
+        Hacer un contador de likes
+        Comprobar que no se repita el nombre del usuario
+    */
+    else if(separador[0] == "LIKE_TWEET"){
+        if(separador.length == 2){
+            if(separador[0].trim() != '' && separador[1].trim() != ''){
+                
+                //Busca el tweet al cual le queremos dar like
+                Tweet.findById(separador[1],(err,search)=>{
+                    if(err){
+                        res.status(500).send({message:"Error general del servidor, err: " + err});
+                    }else if (search){
+                        //Busca un usuario que en el arreglo de tweets tenga este tweet
+                        User.findOne({tweets:separador[1]},(err, searchUserTweet)=>{
+                            if(err){
+                                res.status(500).send({message:"Error general del servidor: "+ err});
+                            }else if(searchUserTweet){
+                                //Busca al usuario y mira si este tiene de seguidor al que quiere dar like
+                                User.findOne({_id:req.user.sub,follow:searchUserTweet.id},(err,searchFollow)=>{
+                                    if(err){
+                                        res.status(500).send({message:"Error general del servidor, err" + err});
+                                    }else if(searchFollow){
+                                        // Busca que el usuario no le haya dado like antes
+                                        Tweet.findOne({_id:separador[1],'like.users': req.user.name},(err,searchTweet)=>{
+                                            if(err){
+                                                res.status(500).send({message:"Error general del servidor, err: "+ err});
+                                            }else if(searchTweet){
+                                                res.status(400).send({message:"Usted ya le dio like a este comentario"});
+                                            }else{
+                                                // Va a actualizar el tweet agregando el usuario quien dio like y sumandole uno al contador de likes
+                                                Tweet.findByIdAndUpdate(separador[1],{
+                                                    $push:{'like.users':req.user.name}, $inc:{'like.likes':1}},
+                                                    {new:true}, (err,updatelike)=>{
+                                                        if(err){
+                                                            res.status(500).send({message:"Error general del sistema, err: "+ err});
+                                                        }else if(updatelike){
+                                                            res.status(200).send({message:"Usted le acaba de dar like a la publicacion"});
+                                                        }else{
+                                                            res.status(404).send({message:"No se encontro ni se pudo dar like a este tweet"});
+                                                        }
+                                                });
+                                            }
+                                        });
+                                    }else{
+                                        res.status(404).send({message:"Este usuario no lo sigue"});
+                                    }
+                                });
+                            }else{
+                                res.status(404).send({message:"Este tweet no esta en el usuario que desea darle dislike"});
+                            }
+                        });
+                    }else{
+                        res.status(404).send({message:"No se encontro el tweet que desea darle like"});
+                    }
+                });
+            }else{
+                res.status(400).send({message:"Usted esta dejando espacios en blanco"});
+            }
+        }else{
+            res.status(404).send({message:"Ingrese todos los parametros solicitados"});
+        }
+    }
+
+// ------------- Dislike tweet -------------------
+    else if(separador[0]== "DISLIKE_TWEET"){
+        if(separador.length == 2){
+            if(separador[0].trim() != '' && separador[1].trim()){
+                //Va a buscar el Tweet
+                Tweet.findById(separador[1],(err,searchTweet)=>{
+                    if(err){
+                        res.status(500).send({message:"Error general del servidor, err" + err});
+                    }else if(searchTweet){
+                        // Buscar un usuario que en su arreglo de tweets tenga dicho tweet
+                        User.findOne({tweets:separador[1]},(err, searchUserTweet)=>{
+                            if(err){
+                                res.status(500).send({message:"Error general del servidor: "+ err});
+                            }else if(searchUserTweet){
+                                //Va a buscar a los follows del usuario al cual le quiere dar like
+                                User.findOne({_id:req.user.sub,follow:searchUserTweet.id},(err,searchFollow)=>{
+                                    if(err){
+                                        res.status(500).send({message:"Error general del servidor, err" + err});
+                                    }else if(searchFollow){
+                                        //Actualiza el tweet. Quita del arreglo users el nombre del usuario y al contador de likes le quita uno
+                                        Tweet.findOneAndUpdate({_id:separador[1], 'like.users':req.user.name},
+                                        {$pull:{'like.users':req.user.name}, $inc:{'like.likes':-1}},(err,updatelike)=>{
+                                            if(err){
+                                                res.status(500).send({message:"Error general del servidor: " + err});
+                                            }else if(updatelike){
+                                                res.status(200).send({message:"Usted le acaba de quitar su like a esta publicacion"});
+                                            }else{
+                                                res.status(404).send({message:"Usted no le habia dado like a esta publicacion para quitarselo ..."});
+                                            }
+                                        });
+                                    }else{
+                                        res.status(404).send({message:"No sigue a este usuario"});
+                                    }
+                                });
+                            }else{
+                                res.status(404).send({message:"Este tweet no esta en el usuario que desea darle dislike"});
+                            }
+                        });
+                    }else{
+                        res.status(200).send({message:"No se encontro este tweet ya que no existe"});
+                    }
+                });
+            }else{
+                res.status(404).send({message:"No deje los cambos vacios"});
+            }   
+        }else{
+            res.status(404).send({message:"Ingrese todos los parametros solicitados"});
+        }
+    }
+
+// ------------- Reply_tweet ---------------------
+    else if(separador[0]== "REPLY_TWEET"){
+        if(separador.length == 3){
+            if(separador[0].trim() != '' && separador[1].trim() != '' && separador[2].trim() != ''){
+                
+                let reply = new replyTweetModel();
+
+                reply.date = new Date(moment().format('YYYY MM DD'));
+                reply.name = req.user.name;
+                reply.text = separador[2];
+
+                Tweet.findByIdAndUpdate(separador[1],{$push:{'replytweet':reply}},
+                        {new:true},(err,tweetExist)=>{
+                            if(err){
+                                res.status(500).send({message:"Error general del servidor: ", err});
+                            }else if(tweetExist){
+                                res.status(200).send({message:"Su comentario ha sido publicado", tweetExist});
+                            }else{
+                                res.status(404).send({message:"Este tweet no existe"});
+                            }
+                });
+            }else{
+                res.status(400).send({message:"No deje campos vacios"});
+            }
+        }else{
+            res.status(400).send({message:"Ingrese la cantidad de parametros correctos"});
+        }
+    }
+
+// ---------------- ReTweet ----------------------
+    else if(separador[0]== "RETWEET"){
+        if(separador.length == 2 ){
+            if(separador[0].trim() != '' && separador[1].trim() != ''){
+                Tweet.findOne({_id:separador[1], 'retweets.user':req.user.name},(err,searchDuplicateRetweet)=>{
+                    if(err){
+                        res.status(500).send({message:"1. Error general del sistema: " + err});
+                    }else if(searchDuplicateRetweet){
+                        User.findOne({name:req.user.name},(err,userTweetReply)=>{
+                            if(err){
+                                res.status(500).send({message:"Error general del servidor"});
+                            }else if(userTweetReply){
+                                Tweet.findOneAndRemove({_id:userTweetReply.tweets, retweet:true},(err,removeTweetReply)=>{
+                                    if(err){
+                                        res.status(500).send({message:"Error general del servidor, "+ err});
+                                    }else if(removeTweetReply){
+                                        User.findOneAndUpdate({name: req.user.name},{$pull:{tweets:removeTweetReply._id}},{new:true},(err,removeUserReTweet)=>{
+                                            if(err){
+                                                res.status(500).send({message:"Error general del servidor, "+ err});
+                                            }else if(removeUserReTweet){
+                                                Tweet.findByIdAndUpdate(separador[1], {$pull:{retweets:{user:req.user.name}}},{new:true},(err,userTweetDelete)=>{
+                                                    if(err){
+                                                        res.status(500).send({message:"Error general del servidor, "+ err});
+                                                    }else if(userTweetDelete){
+                                                        res.status(200).send({message:"Se elimino este retweet"});
+                                                    }else{
+                                                        res.status(404).send({message:"No se encontro al usuario que se le eliminara del tweet Original"});
+                                                    }
+                                                });
+                                            }else{
+                                                res.status(404).send({message:"No se encontro al usuario que se le eliminara el tweet"});
+                                            }
+                                        });
+                                    }else{
+                                        res.status(404).send({message:"No se encontro al usuario que compartio este tweet"})
+                                    }
+                                });
+                            }else{
+                                res.status(404).send({message:"No se logro eliminar este retweet"})
+                            }
+                        });
+                    }else{
+                        let retweet = new replyTweetModel();
+                        retweet.user = req.user.name;
+
+                        Tweet.findByIdAndUpdate(separador[1],{$push:{'retweets':retweet}},{new:true},(err, searchRetweet)=>{
+                            if(err){
+                                res.status(500).send({message:"2. Error general del servidor: " + err});
+                            }else if(searchRetweet){
+                                let tweet = new Tweet();
+                                tweet.text = searchRetweet.text;
+                                tweet.like = searchRetweet.like;
+                                tweet.replytweet = searchRetweet.replytweet;
+                                tweet.retweets = searchRetweet.retweets;
+                                tweet.date = searchRetweet.date;
+                                tweet.retweet = true; 
+                                
+                                tweet.save((err, reetweet)=>{
+                                    if(err){
+                                        res.status(500).send({message:"2.1 Error general del sistema: " + err});
+                                    }else if(reetweet){
+                                        User.findOneAndUpdate({name:req.user.name},{$push:{tweets:reetweet._id}},{new:true},(err,userUpdate)=>{
+                                            if(err){
+                                                res.status(500).send({message:"Error general ser servidor .user:" + err});
+                                            }else if(userUpdate){
+                                                res.status(200).send({message: reetweet});
+                                            }else{
+                                                res.status(404).send({message:"No se encontro al usuario a quien se le asignara el retweet"});
+                                            }
+                                        });
+                                    }else{
+                                        res.status(404).send({message:"No se logro darle retweet este tweet"});
+                                    }
+                                });
+                            }else{
+                                res.status(404).send({message:"No se encontro el tweet que desea compartir"});
+                            }
+                        });
+                    }
+                });
+            }else{
+                res.status(404).send({message:"Esta dejando campos vacios"})
+            }
+
+        }else if(separador.length == 3){
+            if(separador[0].trim() != '' && separador[1].trim() != ''){
+                Tweet.findOne({_id:separador[1], 'retweets.user':req.user.name},(err,searchDuplicateRetweet)=>{
+                    if(err){
+                        res.status(500).send({message:"1. Error general del sistema: " + err});
+                    }else if(searchDuplicateRetweet){
+                        User.findOne({name:req.user.name},(err,userTweetReply)=>{
+                            if(err){
+                                res.status(500).send({message:"Error general del servidor"});
+                            }else if(userTweetReply){
+                                Tweet.findOneAndRemove({_id:userTweetReply.tweets, retweet:true},(err,removeTweetReply)=>{
+                                    if(err){
+                                        res.status(500).send({message:"Error general del servidor, "+ err});
+                                    }else if(removeTweetReply){
+                                        User.findOneAndUpdate({name: req.user.name},{$pull:{tweets:removeTweetReply._id}},{new:true},(err,removeUserReTweet)=>{
+                                            if(err){
+                                                res.status(500).send({message:"Error general del servidor, "+ err});
+                                            }else if(removeUserReTweet){
+                                                Tweet.findByIdAndUpdate(separador[1], {$pull:{retweets:{user:req.user.name}}},{new:true},(err,userTweetDelete)=>{
+                                                    if(err){
+                                                        res.status(500).send({message:"Error general del servidor, "+ err});
+                                                    }else if(userTweetDelete){
+                                                        res.status(200).send({message:"Se elimino este retweet"});
+                                                    }else{
+                                                        res.status(404).send({message:"No se encontro al usuario que se le eliminara del tweet Original"});
+                                                    }
+                                                });
+                                            }else{
+                                                res.status(404).send({message:"No se encontro al usuario que se le eliminara el tweet"});
+                                            }
+                                        });
+                                    }else{
+                                        res.status(404).send({message:"No se encontro al usuario que compartio este tweet"})
+                                    }
+                                });
+                            }else{
+                                res.status(404).send({message:"No se logro eliminar este retweet"})
+                            }
+                        });
+                    }else{
+                        let retweet = new replyTweetModel();
+                        retweet.user = req.user.name;
+                        retweet.text = separador[2];
+
+                        Tweet.findByIdAndUpdate(separador[1],{$push:{'retweets':retweet}},{new:true},(err, searchRetweet)=>{
+                            if(err){
+                                res.status(500).send({message:"2. Error general del servidor: " + err});
+                            }else if(searchRetweet){
+                                let tweet = new Tweet();
+
+                                tweet.text = searchRetweet.text;
+                                tweet.like = searchRetweet.like;
+                                tweet.replytweet = searchRetweet.replytweet;
+                                tweet.retweets = searchRetweet.retweets;
+                                tweet.date = searchRetweet.date;
+                                tweet.retweet = true; 
+                                
+                                tweet.save((err, reetweet)=>{
+                                    if(err){
+                                        res.status(500).send({message:"2.1 Error general del sistema: " + err});
+                                    }else if(reetweet){
+                                        User.findOneAndUpdate({name:req.user.name},{$push:{tweets:reetweet._id}},{new:true},(err,userUpdate)=>{
+                                            if(err){
+                                                res.status(500).send({message:"Error general ser servidor .user:" + err});
+                                            }else if(userUpdate){
+                                                res.status(200).send({message: reetweet});
+                                            }else{
+                                                res.status(404).send({message:"No se encontro al usuario a quien se le asignara el retweet"});
+                                            }
+                                        });
+                                    }else{
+                                        res.status(404).send({message:"No se logro darle retweet este tweet"});
+                                    }
+                                });
+                            }else{
+                                res.status(404).send({message:"No se encontro el tweet que desea compartir"});
+                            }
+                        });
+                    }
+                });
+            }else{
+                res.status(404).send({message:"Esta dejando campos vacios"})
+            }
+
+        }else{
+            res.status(404).send({message:"No esta ingresando la cantidad de parametros correctos"});
+        }
+    }
+
 }
 
 

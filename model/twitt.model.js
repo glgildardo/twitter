@@ -5,8 +5,21 @@ var Schema = mongoose.Schema;
 
 var twitterSchema =({
     text: String,
-    likes: Number,
-    date: Date
+    like: {
+        users: [],
+        likes: Number
+    },
+    replytweet: [{
+        text: String,
+        name: String,
+        date: Date 
+    }],
+    retweets:[ {
+        user: String,
+        text: String,
+    }],
+    date: Date,
+    retweet: Boolean
 });
 
 module.exports = mongoose.model('twitter', twitterSchema);

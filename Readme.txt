@@ -37,3 +37,15 @@ Estructura de las funciones en postman
 
 - UNFOLLOW
     UNFOLLOW|username
+
+- LIKE
+    UNFOLLOW|id_tweet
+
+- DISLIKE
+    UNFOLLOW|id_tweet
+
+- REPLY_TWEET
+    UNFOLLOW| id_tweet | Comentario
+
+- RETWEET
+    UNFOLLOW| id_tweet | Comentario (Opcional)
